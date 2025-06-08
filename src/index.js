@@ -17,8 +17,8 @@ app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 app.use(cookieParser())
 app.use(cors({
-    origin: 'https://chat-app-khaki-nu-55.vercel.app',
-    credentials : true
+    origin: '*',
+    credentials: true
 }))
 // 
 app.get("/", (req, res) => {
