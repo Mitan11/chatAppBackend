@@ -8,9 +8,25 @@ export const getUsersForSidebar = async (req, res) => {
         const loggedInUserId = req.user._id;
         const filteredUsers = await User.find({ _id: { $ne: loggedInUserId } }).select("-password");
 
+        // Get unread message counts for each user
+        const usersWithUnreadCount = await Promise.all(
+            filteredUsers.map(async (user) => {
+                const unreadCount = await Message.countDocuments({
+                    senderId: user._id,
+                    receiverId: loggedInUserId,
+                    isRead: false
+                });
+
+                return {
+                    ...user.toObject(),
+                    unreadCount
+                };
+            })
+        );
+
         return res.status(200).json({
             status: "success",
-            filteredUsers
+            filteredUsers: usersWithUnreadCount
         })
     } catch (error) {
         console.log("Error fetching users for sidebar", error);
@@ -59,18 +75,20 @@ export const sendMessage = async (req, res) => {
             imageUrl = uploadResponse.secure_url;
         }
 
+        const receiverSocketId = getReceiverSocketId(receiverId);
+
         const newMessage = new Message({
             senderId,
             receiverId,
             text,
-            image: imageUrl
+            image: imageUrl,
+            isDelivered: !!receiverSocketId,
+            deliveredAt: receiverSocketId ? new Date() : null
         })
 
         await newMessage.save();
 
         // realtime fun goes here
-        const receiverSocketId = getReceiverSocketId(receiverId)
-
         if (receiverSocketId) {
             io.to(receiverSocketId).emit('newMessage', newMessage)
         }
@@ -86,5 +104,53 @@ export const sendMessage = async (req, res) => {
         return res.status(500).json({
             message: "Error sending message"
         })
+    }
+}
+
+export const markMessagesAsRead = async (req, res) => {
+    try {
+        const { id: userToChatId } = req.params;
+        const myId = req.user._id;
+
+        // Mark all unread messages from userToChatId as read
+        const result = await Message.updateMany(
+            {
+                senderId: userToChatId,
+                receiverId: myId,
+                isRead: false
+            },
+            {
+                isRead: true,
+                readAt: new Date()
+            }
+        );
+
+        // Get the updated message IDs
+        const updatedMessages = await Message.find({
+            senderId: userToChatId,
+            receiverId: myId,
+            isRead: true
+        }).select('_id');
+
+        const messageIds = updatedMessages.map(msg => msg._id);
+
+        // Emit socket event to sender
+        const senderSocketId = getReceiverSocketId(userToChatId);
+        if (senderSocketId && messageIds.length > 0) {
+            io.to(senderSocketId).emit('messagesRead', { messageIds });
+        }
+
+        return res.status(200).json({
+            status: "success",
+            message: "Messages marked as read",
+            count: result.modifiedCount
+        });
+
+    } catch (error) {
+        console.log("Error marking messages as read", error);
+        return res.status(500).json({
+            status: "error",
+            message: "Error marking messages as read"
+        });
     }
 }
